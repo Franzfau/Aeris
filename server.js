@@ -13,8 +13,8 @@ const MERCHANT_ID_EZZY = process.env.MERCHANT_ID_EZZY;
 const cors = require('cors');
 app.use(cors());
 
-// შენი შემოტანილი ფუნქცია:
-app.post('/api/create-order-and-credo', async (req, res) => {
+// საერთო ფუნქცია შეკვეთისა და კრედოს ინტეგრაციისთვის
+const handleCredoOrder = async (req, res) => {
   try {
     const products = Array.isArray(req.body.products) ? req.body.products : [];
 
@@ -109,9 +109,13 @@ app.post('/api/create-order-and-credo', async (req, res) => {
       error: err.response?.data || err.message
     });
   }
-});
+};
 
-// სერვერის გაშვება (აუცილებლად უნდა ჰქონდეს ბოლოში):
+// ორივე მისამართის მხარდაჭერა 404 შეცდომის თავიდან ასაცილებლად
+app.post('/api/create-order-and-credo', handleCredoOrder);
+app.post('/api/create-order-and-bog-ezzy', handleCredoOrder);
+
+// სერვერის გაშვება
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
