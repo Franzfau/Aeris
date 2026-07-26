@@ -10,6 +10,8 @@ const SHOP = process.env.SHOP;
 const ACCESS_TOKEN = process.env.ACCESS_TOKEN;
 const SECRET_EZZY = process.env.SECRET_EZZY;
 const MERCHANT_ID_EZZY = process.env.MERCHANT_ID_EZZY;
+const cors = require('cors');
+app.use(cors());
 
 // შენი შემოტანილი ფუნქცია:
 app.post('/api/create-order-and-credo', async (req, res) => {
