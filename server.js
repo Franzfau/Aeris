@@ -1,3 +1,17 @@
+const express = require('express');
+const axios = require('axios');
+const crypto = require('crypto');
+const qs = require('qs');
+
+const app = express();
+app.use(express.json());
+
+const SHOP = process.env.SHOP;
+const ACCESS_TOKEN = process.env.ACCESS_TOKEN;
+const SECRET_EZZY = process.env.SECRET_EZZY;
+const MERCHANT_ID_EZZY = process.env.MERCHANT_ID_EZZY;
+
+// შენი შემოტანილი ფუნქცია:
 app.post('/api/create-order-and-credo', async (req, res) => {
   try {
     const products = Array.isArray(req.body.products) ? req.body.products : [];
@@ -34,7 +48,6 @@ app.post('/api/create-order-and-credo', async (req, res) => {
 
     const draftOrder = shopifyResponse.data.draft_order;
 
-    // შიდა ფუნქციის გამოძახება გარე ლინკის ნაცვლად:
     const orderCode = 'ORD_' + Date.now();
     const formattedProducts = products.map(p => ({
       id: String(p.id),
@@ -94,4 +107,10 @@ app.post('/api/create-order-and-credo', async (req, res) => {
       error: err.response?.data || err.message
     });
   }
+});
+
+// სერვერის გაშვება (აუცილებლად უნდა ჰქონდეს ბოლოში):
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, () => {
+  console.log(`Server is running on port ${PORT}`);
 });
