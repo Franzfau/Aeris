@@ -9,8 +9,8 @@ app.use(express.json());
 app.use(cors());
 
 // --- სერვერის ცვლადები (Environment Variables) ---
-const SHOP = process.env.SHOP; // მაგ: your-store.myshopify.com
-const ACCESS_TOKEN = process.env.ACCESS_TOKEN; // Shopify Admin API Token
+const SHOP = process.env.SHOP; 
+const ACCESS_TOKEN = process.env.ACCESS_TOKEN; 
 
 // TBC Keys
 const TBC_API_KEY_EZZY = process.env.TBC_API_KEY_EZZY;
@@ -90,71 +90,26 @@ app.post('/api/tbc-order', async (req, res) => {
 });
 
 
-// ===================== BOG ORDER =====================
-app.post('/api/bog-order', async (req, res) => {
-  try {
-    const products = Array.isArray(req.body.products) ? req.body.products : [];
-    if (!products.length) return res.status(400).json({ error: "No products" });
-
-    const tokenResponse = await axios.post(
-      'https://oauth2.bog.ge/auth/realms/bog/protocol/openid-connect/token',
-      qs.stringify({ grant_type: 'client_credentials' }),
-      {
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'Authorization': 'Basic ' + Buffer.from(BOG_CLIENT_ID_EZZY + ':' + BOG_CLIENT_SECRET_EZZY).toString('base64')
-        }
+// ===================== BOG ORDER LOGIC =====================
+async function getBogToken() {
+  const tokenResponse = await axios.post(
+    'https://oauth2.bog.ge/auth/realms/bog/protocol/openid-connect/token',
+    qs.stringify({ grant_type: 'client_credentials' }),
+    {
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Authorization': 'Basic ' + Buffer.from(BOG_CLIENT_ID_EZZY + ':' + BOG_CLIENT_SECRET_EZZY).toString('base64')
       }
-    );
-
-    const accessToken = tokenResponse.data.access_token;
-    const amount = Number(
-      products.reduce((sum, p) => {
-        const rawPrice = Number(p.price);
-        return sum + ((rawPrice > 10000 ? rawPrice / 100 : rawPrice) * (Number(p.amount) || 1));
-      }, 0)
-    );
-
-    const cartItems = products.map(p => ({
-      total_item_amount: (Number(p.price) > 10000 ? Number(p.price) / 100 : Number(p.price)) * (Number(p.amount) || 1),
-      item_description: p.product_title ? `${p.product_title} - ${p.title}` : (p.title || "Product"),
-      total_item_qty: Number(p.amount) || 1,
-      item_vendor_code: String(p.id),
-      product_image_url: "https://ezzy.ge",
-      item_site_detail_url: "https://ezzy.ge"
-    }));
-
-    const checkoutResponse = await axios.post(
-      'https://installment.bog.ge/v1/installment/checkout',
-      {
-        intent: "LOAN",
-        installment_month: 12,
-        installment_type: "STANDARD",
-        shop_order_id: "BOG_" + Date.now(),
-        success_redirect_url: "https://ezzy.ge/pages/payment-success",
-        fail_redirect_url: "https://ezzy.ge/payment-fail",
-        reject_redirect_url: "https://ezzy.ge/payment-fail",
-        validate_items: true,
-        locale: "ka",
-        purchase_units: [{ amount: { currency_code: "GEL", value: amount } }],
-        cart_items: cartItems
-      },
-      {
-        headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' }
-      }
-    );
-
-    const redirectLink = checkoutResponse.data.links.find(l => l.rel === "target");
-    return res.json({ redirectUrl: redirectLink?.href, orderId: checkoutResponse.data.order_id });
-  } catch (err) {
-    console.log("BOG ERROR:", err.response?.data || err.message);
-    return res.status(500).json({ error: err.response?.data || err.message });
-  }
-});
+    }
+  );
+  return tokenResponse.data.access_token;
+}
 
 app.post('/api/create-order-and-bog-ezzy', async (req, res) => {
   try {
     const products = req.body.products || [];
+    
+    // 1. ვქმნით Draft Order-ს შოპიფაიში
     const shopifyResponse = await axios.post(
       `https://${SHOP}/admin/api/2024-01/draft_orders.json`,
       {
@@ -175,40 +130,8 @@ app.post('/api/create-order-and-bog-ezzy', async (req, res) => {
       { headers: { 'X-Shopify-Access-Token': ACCESS_TOKEN, 'Content-Type': 'application/json' } }
     );
 
-    const bogResponse = await axios.post('https://api.ezzy.ge/api/bog-order', { products }, { headers: { 'Content-Type': 'application/json' } });
-
-    return res.json({
-      draftOrderId: shopifyResponse.data.draft_order.id,
-      redirectUrl: bogResponse.data.redirectUrl,
-      orderId: bogResponse.data.orderId
-    });
-  } catch (err) {
-    console.log("BOG EZZY ERROR:", err.response?.data || err.message);
-    return res.status(500).json({ error: err.response?.data || err.message });
-  }
-});
-
-
-// ===================== BOG PART BY PART (BNPL) =====================
-app.post('/api/bog-part-order', async (req, res) => {
-  try {
-    const products = Array.isArray(req.body.products) ? req.body.products : [];
-    const month = Number(req.body.month) || 4;
-    const discountCode = req.body.discount_code || "ZERO";
-    if (!products.length) return res.status(400).json({ error: "No products" });
-
-    const tokenResponse = await axios.post(
-      'https://oauth2.bog.ge/auth/realms/bog/protocol/openid-connect/token',
-      qs.stringify({ grant_type: 'client_credentials' }),
-      {
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'Authorization': 'Basic ' + Buffer.from(BOG_CLIENT_ID_EZZY + ':' + BOG_CLIENT_SECRET_EZZY).toString('base64')
-        }
-      }
-    );
-
-    const accessToken = tokenResponse.data.access_token;
+    // 2. ვუკავშირდებით საქართველოს ბანკის API-ს პირდაპირ
+    const accessToken = await getBogToken();
     const amount = Number(
       products.reduce((sum, p) => {
         const rawPrice = Number(p.price);
@@ -218,43 +141,50 @@ app.post('/api/bog-part-order', async (req, res) => {
 
     const cartItems = products.map(p => ({
       total_item_amount: (Number(p.price) > 10000 ? Number(p.price) / 100 : Number(p.price)) * (Number(p.amount) || 1),
-      item_description: p.product_title ? `${p.product_title} - ${p.title}` : (p.title || "Product"),
+      item_description: p.title || "Product",
       total_item_qty: Number(p.amount) || 1,
       item_vendor_code: String(p.id),
-      product_image_url: "https://ezzy.ge",
-      item_site_detail_url: "https://ezzy.ge"
+      product_image_url: "https://",
+      item_site_detail_url: "https://"
     }));
 
     const checkoutResponse = await axios.post(
       'https://installment.bog.ge/v1/installment/checkout',
       {
         intent: "LOAN",
-        installment_month: month,
+        installment_month: 12,
         installment_type: "STANDARD",
-        discount_code: discountCode,
-        shop_order_id: "BNPL_" + Date.now(),
-        success_redirect_url: "https://ezzy.ge/pages/payment-success",
-        fail_redirect_url: "https://ezzy.ge/payment-fail",
-        reject_redirect_url: "https://ezzy.ge/payment-fail",
+        shop_order_id: "BOG_" + Date.now(),
+        success_redirect_url: "https://" + SHOP,
+        fail_redirect_url: "https://" + SHOP,
+        reject_redirect_url: "https://" + SHOP,
         validate_items: true,
         locale: "ka",
         purchase_units: [{ amount: { currency_code: "GEL", value: amount } }],
         cart_items: cartItems
       },
-      { headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' } }
+      { headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' } }
     );
 
     const redirectLink = checkoutResponse.data.links.find(l => l.rel === "target");
-    return res.json({ redirectUrl: redirectLink?.href, orderId: checkoutResponse.data.order_id });
+
+    return res.json({
+      draftOrderId: shopifyResponse.data.draft_order.id,
+      redirectUrl: redirectLink?.href,
+      orderId: checkoutResponse.data.order_id
+    });
   } catch (err) {
-    console.log("BOG BNPL ERROR:", err.response?.data || err.message);
+    console.log("BOG EZZY ERROR:", err.response?.data || err.message);
     return res.status(500).json({ error: err.response?.data || err.message });
   }
 });
 
-app.post('/api/create-order-and-bog-part-ezzy', async (req, res) => {
+
+// ===================== CREDO ORDER =====================
+app.post('/api/create-order-and-credo', async (req, res) => {
   try {
-    const products = req.body.products || [];
+    const products = Array.isArray(req.body.products) ? req.body.products : [];
+
     const shopifyResponse = await axios.post(
       `https://${SHOP}/admin/api/2024-01/draft_orders.json`,
       {
@@ -267,41 +197,18 @@ app.post('/api/create-order-and-bog-part-ezzy', async (req, res) => {
             phone: req.body.phone || "",
             country: "Georgia"
           },
-          note: `BOG PART BY PART\nName: ${req.body.name}\nPhone: ${req.body.phone}\nAddress: ${req.body.address}`,
-          tags: "BOG-BNPL",
+          note: `Credo Order\nName: ${req.body.name}\nPhone: ${req.body.phone}\nAddress: ${req.body.address}`,
+          tags: "CREDO",
           use_customer_default_address: false
         }
       },
       { headers: { 'X-Shopify-Access-Token': ACCESS_TOKEN, 'Content-Type': 'application/json' } }
     );
 
-    const bogResponse = await axios.post(
-      'https://api.ezzy.ge/api/bog-part-order',
-      { products, month: req.body.month, discount_code: req.body.discount_code },
-      { headers: { 'Content-Type': 'application/json' } }
-    );
-
-    return res.json({
-      draftOrderId: shopifyResponse.data.draft_order.id,
-      redirectUrl: bogResponse.data.redirectUrl,
-      orderId: bogResponse.data.orderId
-    });
-  } catch (err) {
-    console.log("BOG BNPL EZZY ERROR:", err.response?.data || err.message);
-    return res.status(500).json({ error: err.response?.data || err.message });
-  }
-});
-
-
-// ===================== CREDO ORDER =====================
-app.post('/api/credo-order', async (req, res) => {
-  try {
-    const products = Array.isArray(req.body.products) ? req.body.products : [];
     const orderCode = 'ORD_' + Date.now();
-
     const formattedProducts = products.map(p => ({
       id: String(p.id),
-      title: String(p.title).replace(/[^\x00-\x7F]/g, '').trim() || "Product",
+      title: String(p.title || "Product").replace(/[^\x00-\x7F]/g, '').trim(),
       amount: Number(p.amount || 1),
       price: Number(p.price),
       type: 0
@@ -346,59 +253,18 @@ app.post('/api/credo-order', async (req, res) => {
       (response.data && response.data.URL) ||
       (response.data && response.data.data && response.data.data.URL);
 
-    if (redirectUrl) {
-      return res.json({ redirectUrl });
-    }
-
-    return res.status(400).json({ error: "No redirect URL", bankResponse: response.data });
-  } catch (err) {
-    return res.status(500).json({ error: err.response?.data || err.message });
-  }
-});
-
-app.post('/api/create-order-and-credo', async (req, res) => {
-  try {
-    const products = Array.isArray(req.body.products) ? req.body.products : [];
-
-    const shopifyResponse = await axios.post(
-      `https://${SHOP}/admin/api/2024-01/draft_orders.json`,
-      {
-        draft_order: {
-          line_items: products.map(p => ({ variant_id: Number(p.id), quantity: p.amount || 1 })),
-          customer: { first_name: req.body.name || "Customer" },
-          shipping_address: {
-            first_name: req.body.name || "Customer",
-            address1: req.body.address || "",
-            phone: req.body.phone || "",
-            country: "Georgia"
-          },
-          note: `Credo Order\nName: ${req.body.name}\nPhone: ${req.body.phone}\nAddress: ${req.body.address}`,
-          tags: "CREDO",
-          use_customer_default_address: false
-        }
-      },
-      { headers: { 'X-Shopify-Access-Token': ACCESS_TOKEN, 'Content-Type': 'application/json' } }
-    );
-
-    const draftOrder = shopifyResponse.data.draft_order;
-
-    const credoResponse = await axios.post(
-      'https://api.ezzy.ge/api/credo-order',
-      { products },
-      { headers: { 'Content-Type': 'application/json' } }
-    );
-
     return res.json({
-      draftOrderId: draftOrder.id,
-      redirectUrl: credoResponse.data.redirectUrl
+      draftOrderId: shopifyResponse.data.draft_order.id,
+      redirectUrl: redirectUrl
     });
   } catch (err) {
+    console.log("CREDO ERROR:", err.response?.data || err.message);
     return res.status(500).json({ error: err.response?.data || err.message });
   }
 });
 
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
 });
