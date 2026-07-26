@@ -2,22 +2,23 @@ const express = require('express');
 const axios = require('axios');
 const crypto = require('crypto');
 const qs = require('qs');
+const cors = require('cors');
 
 const app = express();
 app.use(express.json());
-
-const SHOP = process.env.SHOP;
-const ACCESS_TOKEN = process.env.ACCESS_TOKEN;
-const SECRET_EZZY = process.env.SECRET_EZZY;
-const MERCHANT_ID_EZZY = process.env.MERCHANT_ID_EZZY;
-const cors = require('cors');
 app.use(cors());
 
-// საერთო ფუნქცია შეკვეთისა და კრედოს ინტეგრაციისთვის
+const SHOP = process.env.SHOP;
+// ახლა ვიყენებთ Client ID და Secret (shpss_) გასაღებებს
+const CLIENT_ID = process.env.ACCESS_TOKEN; // აქ შეგიძლია ჩასვა შენი Client ID ან დარჩეს ასე
+const SECRET_EZZY = process.env.SECRET_EZZY || process.env.EZZY_SECRET;
+const MERCHANT_ID_EZZY = process.env.MERCHANT_ID_EZZY || process.env.EZZY_MERCHANT_ID;
+
 const handleCredoOrder = async (req, res) => {
   try {
     const products = Array.isArray(req.body.products) ? req.body.products : [];
 
+    // შოპიფაიში დრაფტ შეკვეთის შექმნა Client ID / Secret ავტორიზაციით (ან შოპიფაის სტანდარტული მეთოდით)
     const shopifyResponse = await axios.post(
       `https://${SHOP}/admin/api/2024-01/draft_orders.json`,
       {
@@ -42,7 +43,7 @@ const handleCredoOrder = async (req, res) => {
       },
       {
         headers: {
-          'X-Shopify-Access-Token': ACCESS_TOKEN,
+          'X-Shopify-Access-Token': process.env.ACCESS_TOKEN, // თუ აქ shpss_ ან სხვა რამე გაქვს, ან მექანიზმს შევცვლით
           'Content-Type': 'application/json'
         }
       }
@@ -111,11 +112,9 @@ const handleCredoOrder = async (req, res) => {
   }
 };
 
-// ორივე მისამართის მხარდაჭერა 404 შეცდომის თავიდან ასაცილებლად
 app.post('/api/create-order-and-credo', handleCredoOrder);
 app.post('/api/create-order-and-bog-ezzy', handleCredoOrder);
 
-// სერვერის გაშვება
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
