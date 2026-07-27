@@ -114,7 +114,35 @@ const handleCredoOrder = async (req, res) => {
 
 app.post('/api/create-order-and-credo', handleCredoOrder);
 app.post('/api/create-order-and-bog-ezzy', handleCredoOrder);
+// ეს ენდპოინტი იჭერს შოპიფაის კოდს და ცვლის shpat_ ტოკენში
+app.get('/auth/callback', async (req, res) => {
+  const { code, shop } = req.query;
+  
+  if (!code || !shop) {
+    return res.status(400).send("Missing code or shop parameter");
+  }
 
+  try {
+    const response = await axios.post(`https://${shop}/admin/oauth/access_token`, {
+      client_id: 'd7eef7c965c368ed5c61d8605f8aa3cb',
+      client_secret: SECRET_EZZY, // ან პირდაპირ ჩასვით shpss_ გასაღები
+      code: code
+    });
+    
+    const accessToken = response.data.access_token;
+    
+    // ეკრანზე გამოგიტანთ მზა shpat ტოკენს, რომელიც Render-ის Environment-ში უნდა ჩაწეროთ
+    res.send(`
+      <h2>ტოკენი წარმატებით მიღებულია!</h2>
+      <p>თქვენი <b>ACCESS_TOKEN (shpat_)</b> არის:</p>
+      <textarea style="width:100%; height:60px;" readonly>${accessToken}</textarea>
+      <p>დააკოპირეთ ეს ტოკენი და ჩასვით Render-ის Environment Variables-ში როგორც <b>ACCESS_TOKEN</b>.</p>
+    `);
+  } catch (error) {
+    console.error("Token exchange error:", error.response?.data || error.message);
+    res.status(500).send("Failed to exchange token: " + (error.response?.data?.error_description || error.message));
+  }
+});
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
