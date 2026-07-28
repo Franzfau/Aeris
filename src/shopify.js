@@ -2,14 +2,15 @@ import axios from 'axios';
 import { config } from './config.js';
 
 async function adminClient() {
+  const credentials = new URLSearchParams({
+    client_id: config.shopify.clientId,
+    client_secret: config.shopify.clientSecret,
+    grant_type: 'client_credentials'
+  });
   const tokenResponse = await axios.post(
     `https://${config.shopify.storeDomain}/admin/oauth/access_token`,
-    {
-      client_id: config.shopify.clientId,
-      client_secret: config.shopify.clientSecret,
-      grant_type: 'client_credentials'
-    },
-    { timeout: 15_000 }
+    credentials.toString(),
+    { headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: 15_000 }
   );
   return axios.create({
     baseURL: `https://${config.shopify.storeDomain}/admin/api/${config.shopify.apiVersion}`,
@@ -22,7 +23,12 @@ export async function resolveCart(items) {
   const ids = items.map((item) => item.variantId);
   const query = `query variants($ids: [ID!]!) { nodes(ids: $ids) { ... on ProductVariant { id title price { amount currencyCode } product { title } } } }`;
   const { data } = await (await adminClient()).post('/graphql.json', { query, variables: { ids } });
-  if (data.errors?.length) throw new Error('Shopify product lookup failed');
+  if (data.errors?.length) {
+    // The message is safe to log: Shopify does not include our credentials in GraphQL errors.
+    const error = new Error(`Shopify product lookup failed: ${data.errors.map((item) => item.message).join('; ')}`);
+    error.statusCode = 502;
+    throw error;
+  }
   if (data.data.nodes.some((node) => !node)) throw new Error('One or more variants do not exist');
 
   return data.data.nodes.map((variant, index) => {
