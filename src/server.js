@@ -19,6 +19,7 @@ app.use(helmet());
 app.use(cors({ origin(origin, callback) { if (!origin || config.allowedOrigins.includes(origin)) return callback(null, true); callback(new Error('Origin not allowed')); } }));
 app.use(express.json({ limit: '100kb' }));
 
+app.get('/', (_, res) => res.json({ ok: true, service: 'Aeris payments backend' }));
 app.get('/health', (_, res) => res.json({ ok: true }));
 
 app.post('/api/installments/start', async (req, res, next) => {
