@@ -13,7 +13,8 @@ export const config = {
   allowedOrigins: (process.env.ALLOWED_ORIGINS || '').split(',').map((x) => x.trim()).filter(Boolean),
   shopify: {
     storeDomain: required('SHOPIFY_STORE_DOMAIN'),
-    adminAccessToken: required('SHOPIFY_ADMIN_ACCESS_TOKEN'),
-    apiVersion: process.env.SHOPIFY_API_VERSION || '2025-10'
+    clientId: required('SHOPIFY_CLIENT_ID'),
+    clientSecret: required('SHOPIFY_CLIENT_SECRET'),
+    apiVersion: process.env.SHOPIFY_API_VERSION || '2026-07'
   }
 };

@@ -13,7 +13,7 @@ The database stores:
 
 ## Local start
 
-1. Copy `.env.example` to `.env` and fill only newly issued credentials.
+1. Copy `.env.example` to `.env` and fill only newly issued credentials. For Shopify, create a new custom app and use its Client ID and Client secret; do not use a legacy Admin API token.
 2. Run `npm install`.
 3. Run `npm run db:init`.
 4. Run `npm run dev`.
