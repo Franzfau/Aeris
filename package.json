@@ -1,18 +1,20 @@
 {
-  "name": "ezzy-payment-server",
-  "version": "1.0.0",
-  "description": "Multi-bank payment server for Shopify",
-  "main": "server.js",
+  "name": "shopify-installment-backend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
   "scripts": {
-    "start": "node server.js"
+    "dev": "node --watch src/server.js",
+    "start": "node src/server.js",
+    "db:init": "node src/db/init.js"
   },
   "dependencies": {
-    "axios": "^1.6.8",
+    "axios": "^1.7.9",
     "cors": "^2.8.5",
-    "express": "^4.19.2",
-    "qs": "^6.12.0"
-  },
-  "engines": {
-    "node": ">=18.0.0"
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "helmet": "^8.0.0",
+    "pg": "^8.13.1",
+    "zod": "^3.24.1"
   }
 }
