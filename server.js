@@ -20,6 +20,15 @@ const startSchema = z.object({
   }).optional().default({})
 });
 
+const codSchema = z.object({
+  items: z.array(z.object({ variantId: z.string().min(1), quantity: z.number().int().min(1).max(20) })).min(1).max(20),
+  customer: z.object({
+    name: z.string().trim().min(2).max(120),
+    phone: z.string().trim().min(6).max(30),
+    address: z.string().trim().min(4).max(300)
+  })
+});
+
 const app = express();
 app.use(helmet());
 app.use(cors({ origin(origin, callback) { if (!origin || config.allowedOrigins.includes(origin)) return callback(null, true); callback(new Error('Origin not allowed')); } }));
@@ -27,6 +36,24 @@ app.use(express.json({ limit: '100kb' }));
 
 app.get('/', (_, res) => res.json({ ok: true, service: 'Aeris payments backend' }));
 app.get('/health', (_, res) => res.json({ ok: true }));
+
+app.post('/api/orders/cod', async (req, res, next) => {
+  try {
+    const request = codSchema.parse(req.body);
+    // The browser sends only a Shopify variant ID and quantity. Product prices are re-read from Shopify.
+    const items = await resolveCart(request.items);
+    const totalMinor = items.reduce((sum, item) => sum + item.lineMinor, 0);
+    const orderId = crypto.randomUUID();
+    await db.query('INSERT INTO orders (id, bank, status, total_minor, items, customer) VALUES ($1, $2, $3, $4, $5, $6)', [orderId, 'cod', 'pending', totalMinor, JSON.stringify(items), JSON.stringify(request.customer)]);
+    try {
+      const airtableRecordId = await createAirtableOrder({ ...request, orderId, bank: 'cod', items, totalMinor, status: 'pending' });
+      if (airtableRecordId) await db.query('UPDATE orders SET airtable_record_id = $1 WHERE id = $2', [airtableRecordId, orderId]);
+    } catch (syncError) {
+      console.error('Airtable COD sync failed:', syncError.message);
+    }
+    res.status(201).json({ orderId, status: 'pending' });
+  } catch (error) { next(error); }
+});
 
 app.post('/api/installments/start', async (req, res, next) => {
   try {
@@ -73,7 +100,7 @@ async function start() {
   await db.query(`
     CREATE TABLE IF NOT EXISTS orders (
       id UUID PRIMARY KEY,
-      bank TEXT NOT NULL CHECK (bank IN ('tbc', 'bog', 'credo', 'keepz')),
+      bank TEXT NOT NULL CHECK (bank IN ('tbc', 'bog', 'credo', 'keepz', 'cod')),
       status TEXT NOT NULL CHECK (status IN ('pending', 'redirected', 'approved', 'declined', 'failed', 'cancelled')),
       currency CHAR(3) NOT NULL DEFAULT 'GEL',
       total_minor INTEGER NOT NULL CHECK (total_minor > 0),
@@ -94,6 +121,8 @@ async function start() {
     );
     CREATE INDEX IF NOT EXISTS orders_provider_order_id_idx ON orders(provider_order_id);
     ALTER TABLE orders ADD COLUMN IF NOT EXISTS airtable_record_id TEXT;
+    ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_bank_check;
+    ALTER TABLE orders ADD CONSTRAINT orders_bank_check CHECK (bank IN ('tbc', 'bog', 'credo', 'keepz', 'cod'));
   `);
   app.listen(config.port, () => console.log(`Listening on ${config.port}`));
 }

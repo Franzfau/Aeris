@@ -30,7 +30,7 @@ function fieldsFor(order) {
   const fields = {
     'პროდუქტები და ზომები': order.items.map((item) => `${item.title} × ${item.quantity}`).join(', '),
     'სულ თანხა': `${(order.totalMinor / 100).toFixed(2)} GEL`,
-    'გადახდის მეთოდი': order.bank === 'tbc' ? 'TBC განვადება' : `${order.bank.toUpperCase()} განვადება`,
+    'გადახდის მეთოდი': order.bank === 'cod' ? 'კურიერთან გადახდა' : order.bank === 'tbc' ? 'TBC განვადება' : `${order.bank.toUpperCase()} განვადება`,
     'სტატუსი': STATUS_LABELS[order.status] || 'მიმდინარეობს'
   };
 
