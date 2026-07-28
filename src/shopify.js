@@ -21,7 +21,8 @@ async function adminClient() {
 
 export async function resolveCart(items) {
   const ids = items.map((item) => item.variantId);
-  const query = `query variants($ids: [ID!]!) { nodes(ids: $ids) { ... on ProductVariant { id title price { amount currencyCode } product { title } } } }`;
+  // In the current Admin API, ProductVariant.price is a Money scalar (for example "199.00").
+  const query = `query variants($ids: [ID!]!) { nodes(ids: $ids) { ... on ProductVariant { id title price product { title } } } }`;
   const { data } = await (await adminClient()).post('/graphql.json', { query, variables: { ids } });
   if (data.errors?.length) {
     // The message is safe to log: Shopify does not include our credentials in GraphQL errors.
@@ -33,8 +34,8 @@ export async function resolveCart(items) {
 
   return data.data.nodes.map((variant, index) => {
     const quantity = items[index].quantity;
-    if (variant.price.currencyCode !== 'GEL') throw new Error('Only GEL variants can be financed');
-    const unitMinor = Math.round(Number(variant.price.amount) * 100);
+    const unitMinor = Math.round(Number(variant.price) * 100);
+    if (!Number.isFinite(unitMinor) || unitMinor <= 0) throw new Error('Shopify returned an invalid product price');
     return { variantId: variant.id, title: `${variant.product.title} — ${variant.title}`, quantity, unitMinor, lineMinor: unitMinor * quantity };
   });
 }
