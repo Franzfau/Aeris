@@ -51,4 +51,35 @@ app.use((error, _req, res, _next) => {
   res.status(status).json({ error: status === 500 ? 'Internal server error' : error.message });
 });
 
-app.listen(config.port, () => console.log(`Listening on ${config.port}`));
+async function start() {
+  // Safe to run on every deploy: every statement is idempotent.
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS orders (
+      id UUID PRIMARY KEY,
+      bank TEXT NOT NULL CHECK (bank IN ('tbc', 'bog', 'credo', 'keepz')),
+      status TEXT NOT NULL CHECK (status IN ('pending', 'redirected', 'approved', 'declined', 'failed', 'cancelled')),
+      currency CHAR(3) NOT NULL DEFAULT 'GEL',
+      total_minor INTEGER NOT NULL CHECK (total_minor > 0),
+      items JSONB NOT NULL,
+      customer JSONB NOT NULL,
+      provider_order_id TEXT UNIQUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS order_events (
+      id BIGSERIAL PRIMARY KEY,
+      order_id UUID NOT NULL REFERENCES orders(id),
+      source TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      payload JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS orders_provider_order_id_idx ON orders(provider_order_id);
+  `);
+  app.listen(config.port, () => console.log(`Listening on ${config.port}`));
+}
+
+start().catch((error) => {
+  console.error('Database initialization failed:', error.message);
+  process.exit(1);
+});
