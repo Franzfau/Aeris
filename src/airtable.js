@@ -20,6 +20,7 @@ const PAYMENT_LABELS = {
 
 const STATUS_LABELS = {
   pending: 'მიმდინარეობს',
+  verification_required: 'ჩარიცხვა გადასამოწმებელია',
   redirected: 'მიმდინარეობს',
   approved: 'დამტკიცებულია',
   declined: 'უარყოფილია',
@@ -74,5 +75,4 @@ export async function updateAirtableOrder(recordId, status) {
   if (!enabled() || !recordId) return;
   await client().patch(`/${recordId}`, { fields: { 'სტატუსი': STATUS_LABELS[status] || 'მიმდინარეობს' }, typecast: true });
 }
-
 
