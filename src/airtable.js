@@ -7,6 +7,17 @@ const airtableConfig = {
   tableId: process.env.AIRTABLE_TABLE_ID
 };
 
+
+const PAYMENT_LABELS = {
+  cod: 'კურიერთან გადახდა',
+  transfer: 'საბანკო გადარიცხვა',
+  tbc: 'TBC განვადება',
+  bog: 'საქართველოს ბანკის განვადება',
+  credo: 'Credo განვადება',
+  keepz: 'ნაწილ-ნაწილ'
+};
+
+
 const STATUS_LABELS = {
   pending: 'მიმდინარეობს',
   redirected: 'მიმდინარეობს',
@@ -16,9 +27,11 @@ const STATUS_LABELS = {
   cancelled: 'უარყოფილია'
 };
 
+
 function enabled() {
   return Boolean(airtableConfig.token && airtableConfig.baseId && airtableConfig.tableId);
 }
+
 
 function client() {
   return axios.create({
@@ -31,14 +44,16 @@ function client() {
   });
 }
 
+
 function fieldsFor(order) {
   const customer = order.customer || {};
   const fields = {
     'პროდუქტები და ზომები': order.items.map((item) => `${item.title} × ${item.quantity}`).join(', '),
     'სულ თანხა': `${(order.totalMinor / 100).toFixed(2)} GEL`,
-    'გადახდის მეთოდი': order.bank === 'cod' ? 'კურიერთან გადახდა' : order.bank === 'tbc' ? 'TBC განვადება' : `${order.bank.toUpperCase()} განვადება`,
+    'გადახდის მეთოდი': PAYMENT_LABELS[order.bank] || order.bank,
     'სტატუსი': STATUS_LABELS[order.status] || 'მიმდინარეობს'
   };
+
 
   // These fields are added only when the buyer has supplied them in the checkout form.
   if (customer.name) fields['სახელი და გვარი'] = customer.name;
@@ -47,13 +62,17 @@ function fieldsFor(order) {
   return fields;
 }
 
+
 export async function createAirtableOrder(order) {
   if (!enabled()) return null;
   const response = await client().post('', { records: [{ fields: fieldsFor(order) }], typecast: true });
   return response.data.records?.[0]?.id || null;
 }
 
+
 export async function updateAirtableOrder(recordId, status) {
   if (!enabled() || !recordId) return;
   await client().patch(`/${recordId}`, { fields: { 'სტატუსი': STATUS_LABELS[status] || 'მიმდინარეობს' }, typecast: true });
 }
+
+
