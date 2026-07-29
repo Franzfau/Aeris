@@ -82,6 +82,20 @@ app.post('/api/orders/transfer', async (req, res, next) => {
 });
 
 
+app.post('/api/orders/transfer/confirm', async (req, res, next) => {
+  try {
+    const orderId = z.string().uuid().parse(req.body?.orderId);
+    const result = await db.query(
+      "UPDATE orders SET status = 'verification_required', updated_at = NOW() WHERE id = $1 AND bank = 'transfer' AND status IN ('pending', 'verification_required') RETURNING airtable_record_id",
+      [orderId]
+    );
+    if (!result.rowCount) return res.status(404).json({ error: 'Transfer order not found' });
+    await updateAirtableOrder(result.rows[0].airtable_record_id, 'verification_required');
+    res.json({ orderId, status: 'verification_required' });
+  } catch (error) { next(error); }
+});
+
+
 app.post('/api/installments/start', async (req, res, next) => {
   try {
     const request = startSchema.parse(req.body);
@@ -130,7 +144,7 @@ async function start() {
     CREATE TABLE IF NOT EXISTS orders (
       id UUID PRIMARY KEY,
       bank TEXT NOT NULL CHECK (bank IN ('tbc', 'bog', 'credo', 'keepz', 'transfer', 'cod')),
-      status TEXT NOT NULL CHECK (status IN ('pending', 'redirected', 'approved', 'declined', 'failed', 'cancelled')),
+      status TEXT NOT NULL CHECK (status IN ('pending', 'verification_required', 'redirected', 'approved', 'declined', 'failed', 'cancelled')),
       currency CHAR(3) NOT NULL DEFAULT 'GEL',
       total_minor INTEGER NOT NULL CHECK (total_minor > 0),
       items JSONB NOT NULL,
@@ -152,6 +166,8 @@ async function start() {
     ALTER TABLE orders ADD COLUMN IF NOT EXISTS airtable_record_id TEXT;
     ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_bank_check;
     ALTER TABLE orders ADD CONSTRAINT orders_bank_check CHECK (bank IN ('tbc', 'bog', 'credo', 'keepz', 'transfer', 'cod'));
+    ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_status_check;
+    ALTER TABLE orders ADD CONSTRAINT orders_status_check CHECK (status IN ('pending', 'verification_required', 'redirected', 'approved', 'declined', 'failed', 'cancelled'));
   `);
   app.listen(config.port, () => console.log(`Listening on ${config.port}`));
 }
@@ -161,5 +177,4 @@ start().catch((error) => {
   console.error('Database initialization failed:', error.message);
   process.exit(1);
 });
-
 
