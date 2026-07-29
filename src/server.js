@@ -9,6 +9,7 @@ import { db } from './db/client.js';
 import { providerFor } from './providers/index.js';
 import { resolveCart } from './shopify.js';
 
+
 const startSchema = z.object({
   bank: z.enum(['tbc', 'bog', 'credo', 'keepz']),
   items: z.array(z.object({ variantId: z.string().min(1), quantity: z.number().int().min(1).max(20) })).min(1).max(20),
@@ -20,6 +21,7 @@ const startSchema = z.object({
   }).optional().default({})
 });
 
+
 const codSchema = z.object({
   items: z.array(z.object({ variantId: z.string().min(1), quantity: z.number().int().min(1).max(20) })).min(1).max(20),
   customer: z.object({
@@ -29,13 +31,19 @@ const codSchema = z.object({
   })
 });
 
+
+const transferSchema = codSchema;
+
+
 const app = express();
 app.use(helmet());
 app.use(cors({ origin(origin, callback) { if (!origin || config.allowedOrigins.includes(origin)) return callback(null, true); callback(new Error('Origin not allowed')); } }));
 app.use(express.json({ limit: '100kb' }));
 
+
 app.get('/', (_, res) => res.json({ ok: true, service: 'Aeris payments backend' }));
 app.get('/health', (_, res) => res.json({ ok: true }));
+
 
 app.post('/api/orders/cod', async (req, res, next) => {
   try {
@@ -55,6 +63,25 @@ app.post('/api/orders/cod', async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+
+app.post('/api/orders/transfer', async (req, res, next) => {
+  try {
+    const request = transferSchema.parse(req.body);
+    const items = await resolveCart(request.items);
+    const totalMinor = items.reduce((sum, item) => sum + item.lineMinor, 0);
+    const orderId = crypto.randomUUID();
+    await db.query('INSERT INTO orders (id, bank, status, total_minor, items, customer) VALUES ($1, $2, $3, $4, $5, $6)', [orderId, 'transfer', 'pending', totalMinor, JSON.stringify(items), JSON.stringify(request.customer)]);
+    try {
+      const airtableRecordId = await createAirtableOrder({ ...request, orderId, bank: 'transfer', items, totalMinor, status: 'pending' });
+      if (airtableRecordId) await db.query('UPDATE orders SET airtable_record_id = $1 WHERE id = $2', [airtableRecordId, orderId]);
+    } catch (syncError) {
+      console.error('Airtable transfer sync failed:', syncError.message);
+    }
+    res.status(201).json({ orderId, status: 'pending' });
+  } catch (error) { next(error); }
+});
+
+
 app.post('/api/installments/start', async (req, res, next) => {
   try {
     const request = startSchema.parse(req.body);
@@ -62,18 +89,18 @@ app.post('/api/installments/start', async (req, res, next) => {
     const totalMinor = items.reduce((sum, item) => sum + item.lineMinor, 0);
     const orderId = crypto.randomUUID();
     await db.query('INSERT INTO orders (id, bank, status, total_minor, items, customer) VALUES ($1, $2, $3, $4, $5, $6)', [orderId, request.bank, 'pending', totalMinor, JSON.stringify(items), JSON.stringify(request.customer)]);
-    const result = await providerFor(request.bank).initiate({ orderId, items, totalMinor, customer: request.customer, callbackUrl: `${config.publicApiUrl}/api/webhooks/${request.bank}` });
-    await db.query("UPDATE orders SET status = 'redirected', provider_order_id = $1, updated_at = NOW() WHERE id = $2", [result.providerOrderId, orderId]);
-    // Airtable/Softr is an operational view only. A sync failure must never stop a bank application.
+    // Staging mode: save the application now. A contracted bank provider can later
+    // return a verified redirectUrl without changing the Shopify form contract.
     try {
-      const airtableRecordId = await createAirtableOrder({ ...request, orderId, items, totalMinor, status: 'redirected' });
+      const airtableRecordId = await createAirtableOrder({ ...request, orderId, items, totalMinor, status: 'pending' });
       if (airtableRecordId) await db.query('UPDATE orders SET airtable_record_id = $1 WHERE id = $2', [airtableRecordId, orderId]);
     } catch (syncError) {
-      console.error('Airtable order sync failed:', syncError.message);
+      console.error('Airtable installment sync failed:', syncError.message);
     }
-    res.status(201).json({ orderId, redirectUrl: result.redirectUrl });
+    res.status(201).json({ orderId, status: 'pending', redirectUrl: null });
   } catch (error) { next(error); }
 });
+
 
 app.post('/api/webhooks/:bank', async (req, res, next) => {
   try {
@@ -89,18 +116,20 @@ app.post('/api/webhooks/:bank', async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+
 app.use((error, _req, res, _next) => {
   const status = error instanceof z.ZodError ? 400 : error.statusCode || 500;
   if (status >= 500) console.error(error.message);
   res.status(status).json({ error: status === 500 ? 'Internal server error' : error.message });
 });
 
+
 async function start() {
   // Safe to run on every deploy: every statement is idempotent.
   await db.query(`
     CREATE TABLE IF NOT EXISTS orders (
       id UUID PRIMARY KEY,
-      bank TEXT NOT NULL CHECK (bank IN ('tbc', 'bog', 'credo', 'keepz', 'cod')),
+      bank TEXT NOT NULL CHECK (bank IN ('tbc', 'bog', 'credo', 'keepz', 'transfer', 'cod')),
       status TEXT NOT NULL CHECK (status IN ('pending', 'redirected', 'approved', 'declined', 'failed', 'cancelled')),
       currency CHAR(3) NOT NULL DEFAULT 'GEL',
       total_minor INTEGER NOT NULL CHECK (total_minor > 0),
@@ -122,12 +151,15 @@ async function start() {
     CREATE INDEX IF NOT EXISTS orders_provider_order_id_idx ON orders(provider_order_id);
     ALTER TABLE orders ADD COLUMN IF NOT EXISTS airtable_record_id TEXT;
     ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_bank_check;
-    ALTER TABLE orders ADD CONSTRAINT orders_bank_check CHECK (bank IN ('tbc', 'bog', 'credo', 'keepz', 'cod'));
+    ALTER TABLE orders ADD CONSTRAINT orders_bank_check CHECK (bank IN ('tbc', 'bog', 'credo', 'keepz', 'transfer', 'cod'));
   `);
   app.listen(config.port, () => console.log(`Listening on ${config.port}`));
 }
+
 
 start().catch((error) => {
   console.error('Database initialization failed:', error.message);
   process.exit(1);
 });
+
+
