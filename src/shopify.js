@@ -39,3 +39,49 @@ export async function resolveCart(items) {
     return { variantId: variant.id, title: `${variant.product.title} — ${variant.title}`, quantity, unitMinor, lineMinor: unitMinor * quantity };
   });
 }
+
+function splitCustomerName(fullName) {
+  const parts = fullName.trim().split(/\s+/);
+  const firstName = parts.shift() || 'Customer';
+  return { firstName, lastName: parts.join(' ') || '-' };
+}
+
+export async function createShopifyOrder({ orderId, paymentMethod, items, customer }) {
+  const { firstName, lastName } = splitCustomerName(customer.name);
+  const mutation = 'mutation createExternalOrder($order: OrderCreateOrderInput!) { orderCreate(order: $order) { order { id name } userErrors { field message } } }';
+  const order = {
+    lineItems: items.map((item) => ({ variantId: item.variantId, quantity: item.quantity, requiresShipping: true })),
+    financialStatus: 'PENDING',
+    phone: customer.phone,
+    shippingAddress: {
+      firstName,
+      lastName,
+      address1: customer.address,
+      phone: customer.phone,
+      countryCode: 'GE'
+    },
+    note: 'AERIS ' + paymentMethod.toUpperCase() + ' order. External reference: ' + orderId,
+    sourceIdentifier: orderId,
+    tags: ['AERIS', paymentMethod.toUpperCase()]
+  };
+
+  const { data } = await (await adminClient()).post('/graphql.json', { query: mutation, variables: { order } });
+  if (data.errors?.length) {
+    const error = new Error('Shopify order creation failed: ' + data.errors.map((item) => item.message).join('; '));
+    error.statusCode = 502;
+    throw error;
+  }
+
+  const payload = data.data?.orderCreate;
+  if (payload?.userErrors?.length) {
+    const error = new Error('Shopify rejected the order: ' + payload.userErrors.map((item) => item.message).join('; '));
+    error.statusCode = 502;
+    throw error;
+  }
+  if (!payload?.order) {
+    const error = new Error('Shopify did not return the created order');
+    error.statusCode = 502;
+    throw error;
+  }
+  return payload.order;
+}
