@@ -2,19 +2,25 @@ import axios from 'axios';
 import { config } from './config.js';
 
 async function adminClient() {
-  const credentials = new URLSearchParams({
-    client_id: config.shopify.clientId,
-    client_secret: config.shopify.clientSecret,
-    grant_type: 'client_credentials'
-  });
-  const tokenResponse = await axios.post(
-    `https://${config.shopify.storeDomain}/admin/oauth/access_token`,
-    credentials.toString(),
-    { headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: 15_000 }
-  );
+  let accessToken = config.shopify.accessToken;
+
+  if (!accessToken) {
+    const credentials = new URLSearchParams({
+      client_id: config.shopify.clientId,
+      client_secret: config.shopify.clientSecret,
+      grant_type: 'client_credentials'
+    });
+    const tokenResponse = await axios.post(
+      `https://${config.shopify.storeDomain}/admin/oauth/access_token`,
+      credentials.toString(),
+      { headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: 15_000 }
+    );
+    accessToken = tokenResponse.data.access_token;
+  }
+
   return axios.create({
     baseURL: `https://${config.shopify.storeDomain}/admin/api/${config.shopify.apiVersion}`,
-    headers: { 'X-Shopify-Access-Token': tokenResponse.data.access_token, 'Content-Type': 'application/json' },
+    headers: { 'X-Shopify-Access-Token': accessToken, 'Content-Type': 'application/json' },
     timeout: 15_000
   });
 }
