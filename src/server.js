@@ -7,7 +7,7 @@ import { config } from './config.js';
 import { createAirtableOrder, updateAirtableOrder } from './airtable.js';
 import { db } from './db/client.js';
 import { providerFor } from './providers/index.js';
-import { resolveCart } from './shopify.js';
+import { createShopifyOrder, resolveCart } from './shopify.js';
 
 
 const startSchema = z.object({
@@ -44,6 +44,20 @@ app.use(express.json({ limit: '100kb' }));
 app.get('/', (_, res) => res.json({ ok: true, service: 'Aeris payments backend' }));
 app.get('/health', (_, res) => res.json({ ok: true }));
 
+async function createAndAttachShopifyOrder({ orderId, paymentMethod, items, customer }) {
+  try {
+    const shopifyOrder = await createShopifyOrder({ orderId, paymentMethod, items, customer });
+    await db.query(
+      'UPDATE orders SET shopify_order_id = $1, shopify_order_name = $2, updated_at = NOW() WHERE id = $3',
+      [shopifyOrder.id, shopifyOrder.name, orderId]
+    );
+    return shopifyOrder;
+  } catch (error) {
+    await db.query("UPDATE orders SET status = 'failed', updated_at = NOW() WHERE id = $1", [orderId]).catch(() => {});
+    throw error;
+  }
+}
+
 
 app.post('/api/orders/cod', async (req, res, next) => {
   try {
@@ -53,13 +67,14 @@ app.post('/api/orders/cod', async (req, res, next) => {
     const totalMinor = items.reduce((sum, item) => sum + item.lineMinor, 0);
     const orderId = crypto.randomUUID();
     await db.query('INSERT INTO orders (id, bank, status, total_minor, items, customer) VALUES ($1, $2, $3, $4, $5, $6)', [orderId, 'cod', 'pending', totalMinor, JSON.stringify(items), JSON.stringify(request.customer)]);
+    const shopifyOrder = await createAndAttachShopifyOrder({ orderId, paymentMethod: 'cod', items, customer: request.customer });
     try {
       const airtableRecordId = await createAirtableOrder({ ...request, orderId, bank: 'cod', items, totalMinor, status: 'pending' });
       if (airtableRecordId) await db.query('UPDATE orders SET airtable_record_id = $1 WHERE id = $2', [airtableRecordId, orderId]);
     } catch (syncError) {
       console.error('Airtable COD sync failed:', syncError.message);
     }
-    res.status(201).json({ orderId, status: 'pending' });
+    res.status(201).json({ orderId, status: 'pending', shopifyOrderId: shopifyOrder.id, shopifyOrderName: shopifyOrder.name });
   } catch (error) { next(error); }
 });
 
@@ -71,13 +86,14 @@ app.post('/api/orders/transfer', async (req, res, next) => {
     const totalMinor = items.reduce((sum, item) => sum + item.lineMinor, 0);
     const orderId = crypto.randomUUID();
     await db.query('INSERT INTO orders (id, bank, status, total_minor, items, customer) VALUES ($1, $2, $3, $4, $5, $6)', [orderId, 'transfer', 'pending', totalMinor, JSON.stringify(items), JSON.stringify(request.customer)]);
+    const shopifyOrder = await createAndAttachShopifyOrder({ orderId, paymentMethod: 'transfer', items, customer: request.customer });
     try {
       const airtableRecordId = await createAirtableOrder({ ...request, orderId, bank: 'transfer', items, totalMinor, status: 'pending' });
       if (airtableRecordId) await db.query('UPDATE orders SET airtable_record_id = $1 WHERE id = $2', [airtableRecordId, orderId]);
     } catch (syncError) {
       console.error('Airtable transfer sync failed:', syncError.message);
     }
-    res.status(201).json({ orderId, status: 'pending' });
+    res.status(201).json({ orderId, status: 'pending', shopifyOrderId: shopifyOrder.id, shopifyOrderName: shopifyOrder.name });
   } catch (error) { next(error); }
 });
 
@@ -151,6 +167,8 @@ async function start() {
       customer JSONB NOT NULL,
       provider_order_id TEXT UNIQUE,
       airtable_record_id TEXT,
+      shopify_order_id TEXT UNIQUE,
+      shopify_order_name TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
@@ -164,6 +182,9 @@ async function start() {
     );
     CREATE INDEX IF NOT EXISTS orders_provider_order_id_idx ON orders(provider_order_id);
     ALTER TABLE orders ADD COLUMN IF NOT EXISTS airtable_record_id TEXT;
+    ALTER TABLE orders ADD COLUMN IF NOT EXISTS shopify_order_id TEXT;
+    ALTER TABLE orders ADD COLUMN IF NOT EXISTS shopify_order_name TEXT;
+    CREATE UNIQUE INDEX IF NOT EXISTS orders_shopify_order_id_idx ON orders(shopify_order_id) WHERE shopify_order_id IS NOT NULL;
     ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_bank_check;
     ALTER TABLE orders ADD CONSTRAINT orders_bank_check CHECK (bank IN ('tbc', 'bog', 'credo', 'keepz', 'transfer', 'cod'));
     ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_status_check;
@@ -177,4 +198,3 @@ start().catch((error) => {
   console.error('Database initialization failed:', error.message);
   process.exit(1);
 });
-
