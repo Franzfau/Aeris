@@ -9,6 +9,25 @@ import { db } from './db/client.js';
 import { providerFor } from './providers/index.js';
 import { createShopifyOrder, resolveCart } from './shopify.js';
 
+function normalizeGeorgianPhone(value) {
+  const digits = value.replace(/\D/g, '');
+
+  if (/^9955\d{8}$/.test(digits)) return `+${digits}`;
+  if (/^05\d{8}$/.test(digits)) return `+995${digits.slice(1)}`;
+  if (/^5\d{8}$/.test(digits)) return `+995${digits}`;
+
+  return value;
+}
+
+const georgianPhoneSchema = z.string()
+  .trim()
+  .min(6)
+  .max(30)
+  .transform(normalizeGeorgianPhone)
+  .refine((value) => /^\+9955\d{8}$/.test(value), {
+    message: 'Enter a valid Georgian mobile number'
+  });
+
 
 const startSchema = z.object({
   bank: z.enum(['tbc', 'bog', 'credo', 'keepz']),
@@ -16,7 +35,7 @@ const startSchema = z.object({
   // Customer details are optional at initiation. TBC collects the applicant's details on its own protected page.
   customer: z.object({
     name: z.string().trim().min(2).max(120).optional(),
-    phone: z.string().trim().min(6).max(30).optional(),
+    phone: georgianPhoneSchema.optional(),
     address: z.string().trim().min(4).max(300).optional()
   }).optional().default({})
 });
@@ -26,7 +45,7 @@ const codSchema = z.object({
   items: z.array(z.object({ variantId: z.string().min(1), quantity: z.number().int().min(1).max(20) })).min(1).max(20),
   customer: z.object({
     name: z.string().trim().min(2).max(120),
-    phone: z.string().trim().min(6).max(30),
+    phone: georgianPhoneSchema,
     address: z.string().trim().min(4).max(300)
   })
 });
