@@ -60,6 +60,7 @@ export async function createShopifyOrder({ orderId, paymentMethod, items, custom
     ? customer.address.slice(cityPrefix.length).trim()
     : customer.address;
   const customerAddress = { firstName, lastName, address1, city, phone: customer.phone };
+  const customerEmail = customer.phone.replace(/\D/g, '') + '@orders.aeris.ge';
   const mutation = 'mutation createExternalOrder($order: OrderCreateOrderInput!) { orderCreate(order: $order) { order { id name } userErrors { field message } } }';
   const order = {
     lineItems: items.map((item) => ({ variantId: item.variantId, quantity: item.quantity, requiresShipping: true })),
@@ -69,6 +70,7 @@ export async function createShopifyOrder({ orderId, paymentMethod, items, custom
       toUpsert: {
         firstName,
         lastName,
+        email: customerEmail,
         phone: customer.phone,
         addresses: [{ ...customerAddress, country: 'Georgia' }]
       }
