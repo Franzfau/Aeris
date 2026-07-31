@@ -46,6 +46,7 @@ const codSchema = z.object({
   customer: z.object({
     name: z.string().trim().min(2).max(120),
     phone: georgianPhoneSchema,
+    city: z.string().trim().min(2).max(100),
     address: z.string().trim().min(4).max(300)
   })
 });
