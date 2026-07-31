@@ -54,18 +54,26 @@ function splitCustomerName(fullName) {
 
 export async function createShopifyOrder({ orderId, paymentMethod, items, customer }) {
   const { firstName, lastName } = splitCustomerName(customer.name);
+  const city = customer.city.trim();
+  const cityPrefix = city + ',';
+  const address1 = customer.address.startsWith(cityPrefix)
+    ? customer.address.slice(cityPrefix.length).trim()
+    : customer.address;
+  const customerAddress = { firstName, lastName, address1, city, phone: customer.phone };
   const mutation = 'mutation createExternalOrder($order: OrderCreateOrderInput!) { orderCreate(order: $order) { order { id name } userErrors { field message } } }';
   const order = {
     lineItems: items.map((item) => ({ variantId: item.variantId, quantity: item.quantity, requiresShipping: true })),
     financialStatus: 'PENDING',
     phone: customer.phone,
-    shippingAddress: {
-      firstName,
-      lastName,
-      address1: customer.address,
-      phone: customer.phone,
-      countryCode: 'GE'
+    customer: {
+      toUpsert: {
+        firstName,
+        lastName,
+        phone: customer.phone,
+        addresses: [{ ...customerAddress, country: 'Georgia' }]
+      }
     },
+    shippingAddress: { ...customerAddress, countryCode: 'GE' },
     note: 'AERIS ' + paymentMethod.toUpperCase() + ' order. External reference: ' + orderId,
     sourceIdentifier: orderId,
     tags: ['AERIS', paymentMethod.toUpperCase()]
