@@ -46,12 +46,21 @@ function client() {
 }
 
 
+function productUrl(item = {}) {
+  return item.productUrl || item.onlineStoreUrl || item.url || '';
+}
+
 function formatOrderItems(items = []) {
   return items.map((item, index) => {
     const quantity = Number(item.quantity || 1);
     const lineTotal = Number.isFinite(Number(item.lineMinor)) ? (Number(item.lineMinor) / 100).toFixed(2) + ' GEL' : '';
-    return `${index + 1}) ${item.title || 'პროდუქტი'} × ${quantity}${lineTotal ? ' — ' + lineTotal : ''}`;
+    const link = productUrl(item);
+    return `${index + 1}) ${item.title || 'პროდუქტი'} × ${quantity}${lineTotal ? ' — ' + lineTotal : ''}${link ? ' — ბმული: ' + link : ''}`;
   }).join(' | ');
+}
+
+function firstProductUrl(items = []) {
+  return items.map(productUrl).find(Boolean) || '';
 }
 
 
@@ -85,14 +94,22 @@ function fieldsFor(order) {
     'პროდუქტები და ზომები': formatOrderItems(order.items),
     'სულ თანხა': `${(order.totalMinor / 100).toFixed(2)} GEL`,
     'გადახდის მეთოდი': PAYMENT_LABELS[order.bank] || order.bank,
-    'შეკვეთის სტატუსი': STATUS_LABELS[order.status] || 'მიმდინარეობს'
+    'შეკვეთის სტატუსი': STATUS_LABELS[order.status] || 'მიმდინარეობს',
+    'შეკვეთის თარიღი': new Date().toISOString()
   };
 
+  const shopifyOrderName = order.shopifyOrder?.name || order.shopifyOrderName;
+  if (shopifyOrderName) fields['შეკვეთის ნომერი'] = shopifyOrderName;
+
+  const firstLink = firstProductUrl(order.items);
+  if (firstLink) fields['პროდუქტის ბმული'] = firstLink;
 
   // These fields are added only when the buyer has supplied them in the checkout form.
   if (customer.name) fields['სახელი და გვარი'] = customer.name;
   if (customer.phone) fields['ტელეფონი'] = customer.phone;
+  if (customer.city) fields['ქალაქი'] = customer.city;
   if (customer.address) fields['ზუსტი მისამართი'] = customer.address;
+
   return fields;
 }
 
