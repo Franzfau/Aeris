@@ -46,10 +46,19 @@ function client() {
 }
 
 
+function formatOrderItems(items = []) {
+  return items.map((item, index) => {
+    const quantity = Number(item.quantity || 1);
+    const lineTotal = Number.isFinite(Number(item.lineMinor)) ? (Number(item.lineMinor) / 100).toFixed(2) + ' GEL' : '';
+    const link = item.productUrl ? '\n   ბმული: ' + item.productUrl : '';
+    return `${index + 1}. ${item.title || 'პროდუქტი'} × ${quantity}${lineTotal ? ' — ' + lineTotal : ''}${link}`;
+  }).join('\n');
+}
+
 function fieldsFor(order) {
   const customer = order.customer || {};
   const fields = {
-    'პროდუქტები და ზომები': order.items.map((item) => `${item.title} × ${item.quantity}`).join(', '),
+    'პროდუქტები და ზომები': formatOrderItems(order.items),
     'სულ თანხა': `${(order.totalMinor / 100).toFixed(2)} GEL`,
     'გადახდის მეთოდი': PAYMENT_LABELS[order.bank] || order.bank,
     'სტატუსი': STATUS_LABELS[order.status] || 'მიმდინარეობს'
@@ -75,4 +84,3 @@ export async function updateAirtableOrder(recordId, status) {
   if (!enabled() || !recordId) return;
   await client().patch(`/${recordId}`, { fields: { 'სტატუსი': STATUS_LABELS[status] || 'მიმდინარეობს' }, typecast: true });
 }
-
