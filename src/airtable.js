@@ -85,14 +85,14 @@ function fieldsFor(order) {
     'პროდუქტები და ზომები': formatOrderItems(order.items),
     'სულ თანხა': `${(order.totalMinor / 100).toFixed(2)} GEL`,
     'გადახდის მეთოდი': PAYMENT_LABELS[order.bank] || order.bank,
-    'სტატუსი': STATUS_LABELS[order.status] || 'მიმდინარეობს'
+    'შეკვეთის სტატუსი': STATUS_LABELS[order.status] || 'მიმდინარეობს'
   };
 
 
   // These fields are added only when the buyer has supplied them in the checkout form.
   if (customer.name) fields['სახელი და გვარი'] = customer.name;
   if (customer.phone) fields['ტელეფონი'] = customer.phone;
-  if (customer.address) fields['მისამართი'] = customer.address;
+  if (customer.address) fields['ზუსტი მისამართი'] = customer.address;
   return fields;
 }
 
@@ -106,10 +106,10 @@ export async function createAirtableOrder(order) {
 export async function updateAirtableOrder(recordId, status) {
   if (!enabled() || !recordId) return;
   try {
-    await client().patch(`/${recordId}`, { fields: { 'სტატუსი': STATUS_LABELS[status] || 'მიმდინარეობს' }, typecast: true });
+    await client().patch(`/${recordId}`, { fields: { 'შეკვეთის სტატუსი': STATUS_LABELS[status] || 'მიმდინარეობს' }, typecast: true });
   } catch (error) {
-    if (unknownFieldName(error) === 'სტატუსი') {
-      console.warn('Airtable field სტატუსი does not exist; skipped status update');
+    if (unknownFieldName(error) === 'შეკვეთის სტატუსი') {
+      console.warn('Airtable field შეკვეთის სტატუსი does not exist; skipped status update');
       return;
     }
     throw error;
