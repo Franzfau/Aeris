@@ -9,6 +9,7 @@ import { db } from './db/client.js';
 import { providerFor } from './providers/index.js';
 import { resolveCart } from './shopify.js';
 
+
 const startSchema = z.object({
   bank: z.enum(['tbc', 'bog', 'credo', 'keepz']),
   items: z.array(z.object({ variantId: z.string().min(1), quantity: z.number().int().min(1).max(20) })).min(1).max(20),
@@ -20,6 +21,7 @@ const startSchema = z.object({
   }).optional().default({})
 });
 
+
 const codSchema = z.object({
   items: z.array(z.object({ variantId: z.string().min(1), quantity: z.number().int().min(1).max(20) })).min(1).max(20),
   customer: z.object({
@@ -29,13 +31,16 @@ const codSchema = z.object({
   })
 });
 
+
 const app = express();
 app.use(helmet());
 app.use(cors({ origin(origin, callback) { if (!origin || config.allowedOrigins.includes(origin)) return callback(null, true); callback(new Error('Origin not allowed')); } }));
 app.use(express.json({ limit: '100kb' }));
 
+
 app.get('/', (_, res) => res.json({ ok: true, service: 'Aeris payments backend' }));
 app.get('/health', (_, res) => res.json({ ok: true }));
+
 
 app.post('/api/orders/cod', async (req, res, next) => {
   try {
@@ -51,9 +56,13 @@ app.post('/api/orders/cod', async (req, res, next) => {
     } catch (syncError) {
       console.error('Airtable COD sync failed:', syncError.message);
     }
+    sendMetaPurchaseEvent(req, { orderId, items, totalMinor, customer: request.customer }).catch((metaError) => {
+      console.error('Meta CAPI sync failed:', metaError.message);
+    });
     res.status(201).json({ orderId, status: 'pending' });
   } catch (error) { next(error); }
 });
+
 
 app.post('/api/installments/start', async (req, res, next) => {
   try {
@@ -75,6 +84,7 @@ app.post('/api/installments/start', async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+
 app.post('/api/webhooks/:bank', async (req, res, next) => {
   try {
     const provider = providerFor(req.params.bank);
@@ -89,11 +99,84 @@ app.post('/api/webhooks/:bank', async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+
+async function sendMetaPurchaseEvent(req, { orderId, items, totalMinor, customer }) {
+  const token = process.env.META_CAPI_ACCESS_TOKEN;
+  if (!token) return;
+
+  const pixelId = process.env.META_PIXEL_ID || '921615717643409';
+  const endpoint = 'https://graph.facebook.com/v23.0/' + encodeURIComponent(pixelId) + '/events?access_token=' + encodeURIComponent(token);
+  const normalizedName = String(customer.name || '').trim().toLocaleLowerCase('ka-GE').replace(/\s+/g, ' ');
+  const [firstName = '', ...lastNameParts] = normalizedName.split(' ');
+  const phone = normalizeMetaPhone(customer.phone);
+  const userData = {
+    client_ip_address: String(req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.ip,
+    client_user_agent: req.get('user-agent')
+  };
+  if (phone.length >= 7) userData.ph = [sha256Hex(phone)];
+  if (firstName.length > 1) userData.fn = [sha256Hex(firstName)];
+  const lastName = lastNameParts.join(' ');
+  if (lastName.length > 1) userData.ln = [sha256Hex(lastName)];
+
+  const payload = {
+    data: [{
+      event_name: 'Purchase',
+      event_time: Math.floor(Date.now() / 1000),
+      event_id: orderId,
+      action_source: 'website',
+      event_source_url: safeMetaSourceUrl(req.get('referer')) || 'https://aeris.ge/cart',
+      user_data: stripEmpty(userData),
+      custom_data: {
+        currency: 'GEL',
+        value: Number((totalMinor / 100).toFixed(2)),
+        content_type: 'product',
+        content_ids: items.map((item) => String(item.variantId)),
+        contents: items.map((item) => ({
+          id: String(item.variantId),
+          quantity: item.quantity,
+          item_price: Number((item.unitMinor / 100).toFixed(2))
+        })),
+        num_items: items.reduce((sum, item) => sum + item.quantity, 0)
+      }
+    }]
+  };
+  if (process.env.META_CAPI_TEST_EVENT_CODE) payload.test_event_code = process.env.META_CAPI_TEST_EVENT_CODE;
+
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  if (!response.ok) throw new Error('Meta CAPI returned ' + response.status + ': ' + (await response.text()).slice(0, 500));
+}
+
+function normalizeMetaPhone(value) {
+  return String(value || '').replace(/\D/g, '');
+}
+
+function sha256Hex(value) {
+  return crypto.createHash('sha256').update(String(value).trim().toLowerCase()).digest('hex');
+}
+
+function safeMetaSourceUrl(value) {
+  try {
+    const url = new URL(String(value || ''));
+    return url.protocol === 'https:' && ['aeris.ge', 'www.aeris.ge'].includes(url.hostname) ? url.href.slice(0, 2048) : '';
+  } catch (_) {
+    return '';
+  }
+}
+
+function stripEmpty(value) {
+  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry));
+}
+
 app.use((error, _req, res, _next) => {
   const status = error instanceof z.ZodError ? 400 : error.statusCode || 500;
   if (status >= 500) console.error(error.message);
   res.status(status).json({ error: status === 500 ? 'Internal server error' : error.message });
 });
+
 
 async function start() {
   // Safe to run on every deploy: every statement is idempotent.
@@ -126,6 +209,7 @@ async function start() {
   `);
   app.listen(config.port, () => console.log(`Listening on ${config.port}`));
 }
+
 
 start().catch((error) => {
   console.error('Database initialization failed:', error.message);
