@@ -94,6 +94,9 @@ app.post('/api/orders/cod', async (req, res, next) => {
     } catch (syncError) {
       console.error('Airtable COD sync failed:', syncError.message);
     }
+    sendMetaPurchaseEvent(req, { orderId, items, totalMinor, customer: request.customer }).catch((metaError) => {
+      console.error('Meta CAPI sync failed:', metaError.message);
+    });
     res.status(201).json({ orderId, status: 'pending', shopifyOrderId: shopifyOrder.id, shopifyOrderName: shopifyOrder.name });
   } catch (error) { next(error); }
 });
@@ -166,6 +169,76 @@ app.post('/api/webhooks/:bank', async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+
+function sha256(value) {
+  return crypto.createHash('sha256').update(String(value).trim().toLowerCase()).digest('hex');
+}
+
+function getClientIp(req) {
+  const forwarded = req.headers['x-forwarded-for'];
+  if (typeof forwarded === 'string' && forwarded.length) return forwarded.split(',')[0].trim();
+  if (Array.isArray(forwarded) && forwarded[0]) return forwarded[0].split(',')[0].trim();
+  return req.headers['x-real-ip'] || req.socket?.remoteAddress || undefined;
+}
+
+function getCustomerNameParts(customer = {}) {
+  const fullName = customer.name || customer.fullName || '';
+  const parts = String(fullName).trim().split(/\s+/).filter(Boolean);
+  return {
+    firstName: customer.firstName || parts[0],
+    lastName: customer.lastName || parts.slice(1).join(' ') || undefined
+  };
+}
+
+async function sendMetaPurchaseEvent(req, { orderId, items, totalMinor, customer }) {
+  const accessToken = process.env.META_CAPI_ACCESS_TOKEN;
+  const pixelId = process.env.META_PIXEL_ID || '921615717643409';
+  if (!accessToken || !pixelId) return;
+
+  const { firstName, lastName } = getCustomerNameParts(customer);
+  const phone = customer?.phone ? String(customer.phone).replace(/\D/g, '') : '';
+  const userData = {
+    client_ip_address: getClientIp(req),
+    client_user_agent: req.headers['user-agent']
+  };
+  if (phone) userData.ph = [sha256(phone)];
+  if (firstName) userData.fn = [sha256(firstName)];
+  if (lastName) userData.ln = [sha256(lastName)];
+
+  const event = {
+    event_name: 'Purchase',
+    event_time: Math.floor(Date.now() / 1000),
+    event_id: orderId,
+    action_source: 'website',
+    event_source_url: req.headers.referer || req.headers.origin || 'https://aeris.ge/cart',
+    user_data: userData,
+    custom_data: {
+      currency: 'GEL',
+      value: Number((totalMinor / 100).toFixed(2)),
+      content_type: 'product',
+      content_ids: items.map((item) => String(item.variantId || item.productId || item.title)).filter(Boolean),
+      contents: items.map((item) => ({
+        id: String(item.variantId || item.productId || item.title),
+        quantity: item.quantity,
+        item_price: Number(((item.unitMinor || 0) / 100).toFixed(2))
+      }))
+    }
+  };
+
+  const body = { data: [event] };
+  if (process.env.META_CAPI_TEST_EVENT_CODE) body.test_event_code = process.env.META_CAPI_TEST_EVENT_CODE;
+
+  const response = await fetch('https://graph.facebook.com/v23.0/' + pixelId + '/events?access_token=' + encodeURIComponent(accessToken), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error('Meta CAPI responded with ' + response.status + ': ' + message);
+  }
+}
 
 app.use((error, _req, res, _next) => {
   const status = error instanceof z.ZodError ? 400 : error.statusCode || 500;
