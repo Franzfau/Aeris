@@ -54,6 +54,31 @@ function formatOrderItems(items = []) {
   }).join(' | ');
 }
 
+
+function unknownFieldName(error) {
+  const message = error.response?.data?.error?.message || '';
+  return message.match(/Unknown field name: \"(.+?)\"/)?.[1] || null;
+}
+
+async function createRecord(fields) {
+  try {
+    const response = await client().post('', { records: [{ fields }], typecast: true });
+    return response.data.records?.[0]?.id || null;
+  } catch (error) {
+    const missingField = unknownFieldName(error);
+    if (missingField && Object.prototype.hasOwnProperty.call(fields, missingField)) {
+      console.warn(`Airtable field ${missingField} does not exist; retrying without it`);
+      const fallbackFields = { ...fields };
+      delete fallbackFields[missingField];
+      return createRecord(fallbackFields);
+    }
+    if (error.response?.data) {
+      console.error('Airtable create failed:', JSON.stringify(error.response.data));
+    }
+    throw error;
+  }
+}
+
 function fieldsFor(order) {
   const customer = order.customer || {};
   const fields = {
@@ -74,19 +99,19 @@ function fieldsFor(order) {
 
 export async function createAirtableOrder(order) {
   if (!enabled()) return null;
-  try {
-    const response = await client().post('', { records: [{ fields: fieldsFor(order) }], typecast: true });
-    return response.data.records?.[0]?.id || null;
-  } catch (error) {
-    if (error.response?.data) {
-      console.error('Airtable create failed:', JSON.stringify(error.response.data));
-    }
-    throw error;
-  }
+  return createRecord(fieldsFor(order));
 }
 
 
 export async function updateAirtableOrder(recordId, status) {
   if (!enabled() || !recordId) return;
-  await client().patch(`/${recordId}`, { fields: { 'სტატუსი': STATUS_LABELS[status] || 'მიმდინარეობს' }, typecast: true });
+  try {
+    await client().patch(`/${recordId}`, { fields: { 'სტატუსი': STATUS_LABELS[status] || 'მიმდინარეობს' }, typecast: true });
+  } catch (error) {
+    if (unknownFieldName(error) === 'სტატუსი') {
+      console.warn('Airtable field სტატუსი does not exist; skipped status update');
+      return;
+    }
+    throw error;
+  }
 }
