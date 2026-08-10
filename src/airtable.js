@@ -50,9 +50,8 @@ function formatOrderItems(items = []) {
   return items.map((item, index) => {
     const quantity = Number(item.quantity || 1);
     const lineTotal = Number.isFinite(Number(item.lineMinor)) ? (Number(item.lineMinor) / 100).toFixed(2) + ' GEL' : '';
-    const link = item.productUrl ? '\n   ბმული: ' + item.productUrl : '';
-    return `${index + 1}. ${item.title || 'პროდუქტი'} × ${quantity}${lineTotal ? ' — ' + lineTotal : ''}${link}`;
-  }).join('\n');
+    return `${index + 1}) ${item.title || 'პროდუქტი'} × ${quantity}${lineTotal ? ' — ' + lineTotal : ''}`;
+  }).join(' | ');
 }
 
 function fieldsFor(order) {
@@ -75,8 +74,15 @@ function fieldsFor(order) {
 
 export async function createAirtableOrder(order) {
   if (!enabled()) return null;
-  const response = await client().post('', { records: [{ fields: fieldsFor(order) }], typecast: true });
-  return response.data.records?.[0]?.id || null;
+  try {
+    const response = await client().post('', { records: [{ fields: fieldsFor(order) }], typecast: true });
+    return response.data.records?.[0]?.id || null;
+  } catch (error) {
+    if (error.response?.data) {
+      console.error('Airtable create failed:', JSON.stringify(error.response.data));
+    }
+    throw error;
+  }
 }
 
 
