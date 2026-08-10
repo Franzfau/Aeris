@@ -59,9 +59,6 @@ function formatOrderItems(items = []) {
   }).join(' | ');
 }
 
-function firstProductUrl(items = []) {
-  return items.map(productUrl).find(Boolean) || '';
-}
 
 
 function unknownFieldName(error) {
@@ -101,8 +98,6 @@ function fieldsFor(order) {
   const shopifyOrderName = order.shopifyOrder?.name || order.shopifyOrderName;
   if (shopifyOrderName) fields['შეკვეთის ნომერი'] = shopifyOrderName;
 
-  const firstLink = firstProductUrl(order.items);
-  if (firstLink) fields['პროდუქტის ბმული'] = firstLink;
 
   // These fields are added only when the buyer has supplied them in the checkout form.
   if (customer.name) fields['სახელი და გვარი'] = customer.name;
