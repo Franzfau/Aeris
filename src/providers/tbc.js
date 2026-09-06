@@ -22,11 +22,18 @@ async function accessToken() {
   const response = await axios.post(`${baseUrl()}/oauth/token`, body.toString(), {
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
-      Authorization: `Basic ${Buffer.from(`${apiKey}:${apiSecret}`).toString('base64')}`
+      client_id: apiKey,
+      client_secret: apiSecret
     },
     timeout: 15_000
   });
-  return response.data.access_token;
+  const token = response.data?.access_token;
+  if (!token) {
+    const error = new Error('TBC did not return an access token');
+    error.statusCode = 502;
+    throw error;
+  }
+  return token;
 }
 
 export const tbc = {
