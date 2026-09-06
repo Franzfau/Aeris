@@ -142,15 +142,27 @@ app.post('/api/installments/start', async (req, res, next) => {
     const totalMinor = items.reduce((sum, item) => sum + item.lineMinor, 0);
     const orderId = crypto.randomUUID();
     await db.query('INSERT INTO orders (id, bank, status, total_minor, items, customer) VALUES ($1, $2, $3, $4, $5, $6)', [orderId, request.bank, 'pending', totalMinor, JSON.stringify(items), JSON.stringify(request.customer)]);
-    // Staging mode: save the application now. A contracted bank provider can later
-    // return a verified redirectUrl without changing the Shopify form contract.
+
+    let application;
     try {
-      const airtableRecordId = await createAirtableOrder({ ...request, orderId, items, totalMinor, status: 'pending' });
+      const provider = providerFor(request.bank);
+      application = await provider.initiate({ orderId, items, totalMinor });
+      await db.query(
+        "UPDATE orders SET provider_order_id = $1, status = 'redirected', updated_at = NOW() WHERE id = $2",
+        [application.providerOrderId, orderId]
+      );
+    } catch (providerError) {
+      await db.query("UPDATE orders SET status = 'failed', updated_at = NOW() WHERE id = $1", [orderId]).catch(() => {});
+      throw providerError;
+    }
+
+    try {
+      const airtableRecordId = await createAirtableOrder({ ...request, orderId, items, totalMinor, status: 'redirected' });
       if (airtableRecordId) await db.query('UPDATE orders SET airtable_record_id = $1 WHERE id = $2', [airtableRecordId, orderId]);
     } catch (syncError) {
       console.error('Airtable installment sync failed:', syncError.message);
     }
-    res.status(201).json({ orderId, status: 'pending', redirectUrl: null });
+    res.status(201).json({ orderId, status: 'redirected', redirectUrl: application.redirectUrl });
   } catch (error) { next(error); }
 });
 
