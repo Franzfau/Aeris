@@ -26,7 +26,14 @@ async function adminClient() {
 }
 
 export async function resolveCart(items) {
-  const ids = items.map((item) => item.variantId);
+  const ids = items.map((item) => {
+    const id = String(item.variantId).trim();
+    if (/^gid:\/\/shopify\/ProductVariant\/\d+$/.test(id)) return id;
+    if (/^\d+$/.test(id)) return `gid://shopify/ProductVariant/${id}`;
+    const error = new Error('Invalid Shopify product variant ID');
+    error.statusCode = 400;
+    throw error;
+  });
   // In the current Admin API, ProductVariant.price is a Money scalar (for example "199.00").
   const query = `query variants($ids: [ID!]!) { nodes(ids: $ids) { ... on ProductVariant { id title price product { title handle onlineStoreUrl } } } }`;
   const { data } = await (await adminClient()).post('/graphql.json', { query, variables: { ids } });
