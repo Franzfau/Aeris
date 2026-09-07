@@ -32,6 +32,10 @@ const georgianPhoneSchema = z.string()
 const startSchema = z.object({
   bank: z.enum(['tbc', 'bog', 'credo', 'keepz']),
   items: z.array(z.object({ variantId: z.string().min(1), quantity: z.number().int().min(1).max(20) })).min(1).max(20),
+  loan: z.object({
+    type: z.string().trim().min(1).max(100),
+    month: z.number().int().min(1).max(120)
+  }).optional(),
   // Customer details are optional at initiation. TBC collects the applicant's details on its own protected page.
   customer: z.object({
     name: z.string().trim().min(2).max(120).optional(),
@@ -58,7 +62,10 @@ const transferSchema = codSchema;
 const app = express();
 app.use(helmet());
 app.use(cors({ origin(origin, callback) { if (!origin || config.allowedOrigins.includes(origin)) return callback(null, true); callback(new Error('Origin not allowed')); } }));
-app.use(express.json({ limit: '100kb' }));
+app.use(express.json({
+  limit: '100kb',
+  verify(req, _res, buffer) { req.rawBody = buffer; }
+}));
 
 
 app.get('/', (_, res) => res.json({ ok: true, service: 'Aeris payments backend' }));
@@ -146,7 +153,7 @@ app.post('/api/installments/start', async (req, res, next) => {
     let application;
     try {
       const provider = providerFor(request.bank);
-      application = await provider.initiate({ orderId, items, totalMinor });
+      application = await provider.initiate({ orderId, items, totalMinor, loan: request.loan });
       await db.query(
         "UPDATE orders SET provider_order_id = $1, status = 'redirected', updated_at = NOW() WHERE id = $2",
         [application.providerOrderId, orderId]
@@ -158,11 +165,11 @@ app.post('/api/installments/start', async (req, res, next) => {
 
     try {
       const airtableRecordId = await createAirtableOrder({ ...request, orderId, items, totalMinor, status: 'redirected' });
-      if (airtableRecordId) await db.query('UPDATE orders SET airtable_record_id = $1 WHERE id = $2', [airtableRecordId, orderId]);
+      if (airtableRecordId) await db.query('UPDDT orders SET airtable_record_id = $1 WHERE id = $2', [airtableRecordId, orderId]);
     } catch (syncError) {
       console.error('Airtable installment sync failed:', syncError.message);
     }
-    res.status(201).json({ orderId, status: 'redirected', redirectUrl: application.redirectUrl });
+    res.status(201).json({ orderId, providerOrderId: application.providerOrderId, status: 'redirected', redirectUrl: application.redirectUrl });
   } catch (error) { next(error); }
 });
 
