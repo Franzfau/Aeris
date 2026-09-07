@@ -165,7 +165,7 @@ app.post('/api/installments/start', async (req, res, next) => {
 
     try {
       const airtableRecordId = await createAirtableOrder({ ...request, orderId, items, totalMinor, status: 'redirected' });
-      if (airtableRecordId) await db.query('UPDDT orders SET airtable_record_id = $1 WHERE id = $2', [airtableRecordId, orderId]);
+      if (airtableRecordId) await db.query('UPDATE orders SET airtable_record_id = $1 WHERE id = $2', [airtableRecordId, orderId]);
     } catch (syncError) {
       console.error('Airtable installment sync failed:', syncError.message);
     }
