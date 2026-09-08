@@ -8,6 +8,9 @@ import { createAirtableOrder, updateAirtableOrder } from './airtable.js';
 import { db } from './db/client.js';
 import { providerFor } from './providers/index.js';
 import { createShopifyOrder, resolveCart } from './shopify.js';
+import { createTbcAdminSync, initializeTbcSchema, startTbcWorker } from './tbc-integration.js';
+
+const syncTbcAdmin = createTbcAdminSync();
 
 function normalizeGeorgianPhone(value) {
   const digits = value.replace(/\D/g, '');
@@ -70,6 +73,7 @@ app.use(express.json({
 
 app.get('/', (_, res) => res.json({ ok: true, service: 'Aeris payments backend' }));
 app.get('/health', (_, res) => res.json({ ok: true }));
+app.get('/health/tbc', (_, res) => res.json({ revision: 'tbc-2026-09-09', configured: providerFor('tbc').isConfigured() }));
 
 async function createAndAttachShopifyOrder({ orderId, paymentMethod, items, customer }) {
   try {
@@ -150,6 +154,16 @@ app.post('/api/installments/start', async (req, res, next) => {
     const orderId = crypto.randomUUID();
     await db.query('INSERT INTO orders (id, bank, status, total_minor, items, customer) VALUES ($1, $2, $3, $4, $5, $6)', [orderId, request.bank, 'pending', totalMinor, JSON.stringify(items), JSON.stringify(request.customer)]);
 
+    if (request.bank === 'tbc') {
+      const provider = providerFor('tbc');
+      const staged = await db.query(`UPDATE orders SET tbc_environment = $1, tbc_sync_pending = TRUE,
+        tbc_next_poll_at = NOW() + INTERVAL '2 minutes' WHERE id = $2 RETURNING *`, [provider.environment(), orderId]);
+      try {
+        const recordId = await syncTbcAdmin(staged.rows[0]);
+        await db.query('UPDATE orders SET airtable_record_id = $1, tbc_sync_pending = FALSE WHERE id = $2', [recordId, orderId]);
+      } catch (error) { console.error('TBC initial dashboard sync queued for retry:', error.message); }
+    }
+
     let application;
     try {
       const provider = providerFor(request.bank);
@@ -158,12 +172,16 @@ app.post('/api/installments/start', async (req, res, next) => {
         "UPDATE orders SET provider_order_id = $1, status = 'redirected', updated_at = NOW() WHERE id = $2",
         [application.providerOrderId, orderId]
       );
+      if (request.bank === 'tbc') await db.query(`UPDATE orders SET tbc_sync_pending = TRUE,
+        tbc_next_poll_at = NOW() + INTERVAL '30 seconds' WHERE id = $1`, [orderId]);
     } catch (providerError) {
       await db.query("UPDATE orders SET status = 'failed', updated_at = NOW() WHERE id = $1", [orderId]).catch(() => {});
+      if (request.bank === 'tbc') await db.query(`UPDATE orders SET tbc_terminal = TRUE,
+        tbc_sync_pending = TRUE, tbc_next_poll_at = NOW() WHERE id = $1`, [orderId]).catch(() => {});
       throw providerError;
     }
 
-    try {
+    if (request.bank !== 'tbc') try {
       const airtableRecordId = await createAirtableOrder({ ...request, orderId, items, totalMinor, status: 'redirected' });
       if (airtableRecordId) await db.query('UPDATE orders SET airtable_record_id = $1 WHERE id = $2', [airtableRecordId, orderId]);
     } catch (syncError) {
@@ -302,6 +320,8 @@ async function start() {
     ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_status_check;
     ALTER TABLE orders ADD CONSTRAINT orders_status_check CHECK (status IN ('pending', 'verification_required', 'redirected', 'approved', 'declined', 'failed', 'cancelled'));
   `);
+  await initializeTbcSchema(db);
+  startTbcWorker({ db });
   app.listen(config.port, () => console.log(`Listening on ${config.port}`));
 }
 
