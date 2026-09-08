@@ -21,7 +21,8 @@ function safeRedirect(value) {
   try {
     const url = new URL(value);
     if (url.protocol !== 'https:' || url.username || url.password || url.port) return null;
-    if (url.hostname !== 'tbcbank.ge' && !url.hostname.endsWith('.tbcbank.ge')) return null;
+    // Production returns tbcganvadeba.ge (also linked by TBC's official API overview).
+    if (url.hostname !== 'tbcganvadeba.ge' && url.hostname !== 'tbcbank.ge' && !url.hostname.endsWith('.tbcbank.ge')) return null;
     return url.href;
   } catch { return null; }
 }
