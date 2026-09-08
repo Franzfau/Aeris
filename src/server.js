@@ -9,8 +9,10 @@ import { db } from './db/client.js';
 import { providerFor } from './providers/index.js';
 import { createShopifyOrder, resolveCart } from './shopify.js';
 import { createTbcAdminSync, initializeTbcSchema, startTbcWorker } from './tbc-integration.js';
+import { createCredoAdminSync, initializeCredoSchema, startCredoWorker } from './credo-integration.js';
 
 const syncTbcAdmin = createTbcAdminSync();
+const syncCredoAdmin = createCredoAdminSync();
 
 function normalizeGeorgianPhone(value) {
   const digits = value.replace(/\D/g, '');
@@ -74,6 +76,7 @@ app.use(express.json({
 app.get('/', (_, res) => res.json({ ok: true, service: 'Aeris payments backend' }));
 app.get('/health', (_, res) => res.json({ ok: true }));
 app.get('/health/tbc', (_, res) => res.json({ revision: 'tbc-2026-09-09', configured: providerFor('tbc').isConfigured() }));
+app.get('/health/credo', (_, res) => res.json({ revision: 'credo-2026-09-09', configured: providerFor('credo').isConfigured() }));
 
 async function createAndAttachShopifyOrder({ orderId, paymentMethod, items, customer }) {
   try {
@@ -164,6 +167,11 @@ app.post('/api/installments/start', async (req, res, next) => {
       } catch (error) { console.error('TBC initial dashboard sync queued for retry:', error.message); }
     }
 
+    if (request.bank === 'credo') {
+      await db.query(`UPDATE orders SET credo_merchant_id = $1,
+        credo_next_poll_at = NOW() + INTERVAL '30 minutes' WHERE id = $2`, [providerFor('credo').merchantId(), orderId]);
+    }
+
     let application;
     try {
       const provider = providerFor(request.bank);
@@ -174,14 +182,28 @@ app.post('/api/installments/start', async (req, res, next) => {
       );
       if (request.bank === 'tbc') await db.query(`UPDATE orders SET tbc_sync_pending = TRUE,
         tbc_next_poll_at = NOW() + INTERVAL '30 seconds' WHERE id = $1`, [orderId]);
+      if (request.bank === 'credo') await db.query('UPDATE orders SET credo_sync_pending = TRUE WHERE id = $1', [orderId]);
     } catch (providerError) {
       await db.query("UPDATE orders SET status = 'failed', updated_at = NOW() WHERE id = $1", [orderId]).catch(() => {});
       if (request.bank === 'tbc') await db.query(`UPDATE orders SET tbc_terminal = TRUE,
         tbc_sync_pending = TRUE, tbc_next_poll_at = NOW() WHERE id = $1`, [orderId]).catch(() => {});
+      if (request.bank === 'credo') await db.query(`UPDATE orders SET credo_terminal = TRUE,
+        credo_sync_pending = TRUE, credo_next_poll_at = NOW() WHERE id = $1`, [orderId]).catch(() => {});
       throw providerError;
     }
 
-    if (request.bank !== 'tbc') try {
+    if (request.bank === 'credo') {
+      try {
+        const result = await db.query("SELECT * FROM orders WHERE id = $1 AND bank = 'credo'", [orderId]);
+        const recordId = await syncCredoAdmin(result.rows[0]);
+        await db.query('UPDATE orders SET airtable_record_id = $1, credo_sync_pending = FALSE WHERE id = $2', [recordId, orderId]);
+      } catch (error) {
+        await db.query("UPDATE orders SET credo_sync_pending = TRUE, credo_next_poll_at = NOW() + INTERVAL '1 minute' WHERE id = $1", [orderId]);
+        console.error('Credo initial dashboard sync queued for retry:', error.message);
+      }
+    }
+
+    if (request.bank !== 'tbc' && request.bank !== 'credo') try {
       const airtableRecordId = await createAirtableOrder({ ...request, orderId, items, totalMinor, status: 'redirected' });
       if (airtableRecordId) await db.query('UPDATE orders SET airtable_record_id = $1 WHERE id = $2', [airtableRecordId, orderId]);
     } catch (syncError) {
@@ -321,7 +343,9 @@ async function start() {
     ALTER TABLE orders ADD CONSTRAINT orders_status_check CHECK (status IN ('pending', 'verification_required', 'redirected', 'approved', 'declined', 'failed', 'cancelled'));
   `);
   await initializeTbcSchema(db);
+  await initializeCredoSchema(db);
   startTbcWorker({ db });
+  startCredoWorker({ db });
   app.listen(config.port, () => console.log(`Listening on ${config.port}`));
 }
 
