@@ -4,12 +4,13 @@ import express from 'express';
 import helmet from 'helmet';
 import { z } from 'zod';
 import { config } from './config.js';
-import { createAirtableOrder, updateAirtableOrder } from './airtable.js';
+import { createAirtableOrder, updateAirtableOrder, createReliableAdminSync } from './airtable.js';
 import { db } from './db/client.js';
 import { providerFor } from './providers/index.js';
 import { createShopifyOrder, resolveCart } from './shopify.js';
 import { createTbcAdminSync, initializeTbcSchema, startTbcWorker } from './tbc-integration.js';
 import { createCredoAdminSync, initializeCredoSchema, startCredoWorker } from './credo-integration.js';
+import { initializeReliability, idempotencyMiddleware, startAdminRetryWorker, RELIABILITY_REVISION } from './reliability.js';
 
 const syncTbcAdmin = createTbcAdminSync();
 const syncCredoAdmin = createCredoAdminSync();
@@ -71,10 +72,12 @@ app.use(express.json({
   limit: '100kb',
   verify(req, _res, buffer) { req.rawBody = buffer; }
 }));
+app.use(idempotencyMiddleware(db));
 
 
 app.get('/', (_, res) => res.json({ ok: true, service: 'Aeris payments backend' }));
 app.get('/health', (_, res) => res.json({ ok: true }));
+app.get('/health/orders', (_, res) => res.json({ revision: RELIABILITY_REVISION }));
 app.get('/health/tbc', (_, res) => res.json({ revision: 'tbc-2026-09-09', configured: providerFor('tbc').isConfigured() }));
 app.get('/health/credo', (_, res) => res.json({ revision: 'credo-2026-09-09', configured: providerFor('credo').isConfigured() }));
 
@@ -102,12 +105,7 @@ app.post('/api/orders/cod', async (req, res, next) => {
     const orderId = crypto.randomUUID();
     await db.query('INSERT INTO orders (id, bank, status, total_minor, items, customer) VALUES ($1, $2, $3, $4, $5, $6)', [orderId, 'cod', 'pending', totalMinor, JSON.stringify(items), JSON.stringify(request.customer)]);
     const shopifyOrder = await createAndAttachShopifyOrder({ orderId, paymentMethod: 'cod', items, customer: request.customer });
-    try {
-      const airtableRecordId = await createAirtableOrder({ ...request, orderId, bank: 'cod', items, totalMinor, status: 'pending', shopifyOrder });
-      if (airtableRecordId) await db.query('UPDATE orders SET airtable_record_id = $1 WHERE id = $2', [airtableRecordId, orderId]);
-    } catch (syncError) {
-      console.error('Airtable COD sync failed:', syncError.message);
-    }
+    // The database trigger has durably queued dashboard delivery.
     sendMetaPurchaseEvent(req, { orderId, items, totalMinor, customer: request.customer }).catch((metaError) => {
       console.error('Meta CAPI sync failed:', metaError.message);
     });
@@ -124,12 +122,7 @@ app.post('/api/orders/transfer', async (req, res, next) => {
     const orderId = crypto.randomUUID();
     await db.query('INSERT INTO orders (id, bank, status, total_minor, items, customer) VALUES ($1, $2, $3, $4, $5, $6)', [orderId, 'transfer', 'pending', totalMinor, JSON.stringify(items), JSON.stringify(request.customer)]);
     const shopifyOrder = await createAndAttachShopifyOrder({ orderId, paymentMethod: 'transfer', items, customer: request.customer });
-    try {
-      const airtableRecordId = await createAirtableOrder({ ...request, orderId, bank: 'transfer', items, totalMinor, status: 'pending', shopifyOrder });
-      if (airtableRecordId) await db.query('UPDATE orders SET airtable_record_id = $1 WHERE id = $2', [airtableRecordId, orderId]);
-    } catch (syncError) {
-      console.error('Airtable transfer sync failed:', syncError.message);
-    }
+    // Retain legacy transfer records; new storefront transfer buttons are removed.
     res.status(201).json({ orderId, status: 'pending', shopifyOrderId: shopifyOrder.id, shopifyOrderName: shopifyOrder.name });
   } catch (error) { next(error); }
 });
@@ -143,7 +136,7 @@ app.post('/api/orders/transfer/confirm', async (req, res, next) => {
       [orderId]
     );
     if (!result.rowCount) return res.status(404).json({ error: 'Transfer order not found' });
-    await updateAirtableOrder(result.rows[0].airtable_record_id, 'verification_required');
+    // Status changes are queued atomically by the database trigger.
     res.json({ orderId, status: 'verification_required' });
   } catch (error) { next(error); }
 });
@@ -203,7 +196,7 @@ app.post('/api/installments/start', async (req, res, next) => {
       }
     }
 
-    if (request.bank !== 'tbc' && request.bank !== 'credo') try {
+    if (request.bank !== 'tbc' && request.bank !== 'credo' && request.bank !== 'bog') try {
       const airtableRecordId = await createAirtableOrder({ ...request, orderId, items, totalMinor, status: 'redirected' });
       if (airtableRecordId) await db.query('UPDATE orders SET airtable_record_id = $1 WHERE id = $2', [airtableRecordId, orderId]);
     } catch (syncError) {
@@ -222,7 +215,8 @@ app.post('/api/webhooks/:bank', async (req, res, next) => {
     const result = await db.query('UPDATE orders SET status = $1, updated_at = NOW() WHERE provider_order_id = $2 AND status IN (\'pending\', \'redirected\') RETURNING id, airtable_record_id', [event.status, event.providerOrderId]);
     if (result.rowCount) {
       await db.query('INSERT INTO order_events (order_id, source, event_type, payload) VALUES ($1, $2, $3, $4)', [result.rows[0].id, req.params.bank, event.status, JSON.stringify(req.body)]);
-      try { await updateAirtableOrder(result.rows[0].airtable_record_id, event.status); } catch (syncError) { console.error('Airtable status sync failed:', syncError.message); }
+      // BOG status and its durable dashboard revision change in the same UPDATE.
+      if (req.params.bank === 'keepz') await updateAirtableOrder(result.rows[0].airtable_record_id, event.status);
     }
     res.sendStatus(200); // idempotent: duplicate callbacks do not create a second order
   } catch (error) { next(error); }
@@ -344,8 +338,10 @@ async function start() {
   `);
   await initializeTbcSchema(db);
   await initializeCredoSchema(db);
+  await initializeReliability(db);
   startTbcWorker({ db });
   startCredoWorker({ db });
+  startAdminRetryWorker(db, createReliableAdminSync());
   app.listen(config.port, () => console.log(`Listening on ${config.port}`));
 }
 
