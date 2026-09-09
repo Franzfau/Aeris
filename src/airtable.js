@@ -127,3 +127,37 @@ export async function updateAirtableOrder(recordId, status) {
     throw error;
   }
 }
+
+// Only the durable worker creates these records. Stable upsert keys prevent
+// duplication when Airtable accepted a request but its response was lost.
+export function createReliableAdminSync({ http, isEnabled = enabled } = {}) {
+  return async order => {
+    if (!isEnabled()) throw new Error('Dashboard is not configured');
+    const api = http || client();
+    const number = order.shopify_order_name || `${order.bank.toUpperCase()}-${order.id}`;
+    let recordId = order.airtable_record_id;
+    if (!recordId) {
+      const escaped = number.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+      const found = await api.get('', { params: { filterByFormula: `{შეკვეთის ნომერი}='${escaped}'`, maxRecords: 2 } });
+      if (found.data.records?.length > 1) throw new Error('Duplicate dashboard reference requires review');
+      recordId = found.data.records?.[0]?.id;
+    }
+    const bankFields = order.bank === 'bog' ? {
+      'განვადების ბანკი': 'საქართველოს ბანკი',
+      'განვადების სტატუსი': STATUS_LABELS[order.status] || 'მიმდინარეობს'
+    } : {};
+    if (!recordId) {
+      const fields = { ...fieldsFor({ ...order, totalMinor: order.total_minor, shopifyOrderName: number }),
+        ...bankFields, 'შეკვეთის ნომერი': number, 'შეკვეთის თარიღი': new Date(order.created_at).toISOString() };
+      const response = await api.patch('', { performUpsert: { fieldsToMergeOn: ['შეკვეთის ნომერი'] }, records: [{ fields }], typecast: true });
+      recordId = response.data.records?.[0]?.id;
+      if (!recordId) throw new Error('Dashboard did not return a record');
+    } else if (order.bank === 'bog') {
+      // Never overwrite an operator's delivery, payment, address or total edits.
+      await api.patch(`/${recordId}`, { fields: bankFields, typecast: true });
+    } else if (order.bank === 'transfer' && order.status === 'verification_required') {
+      await api.patch(`/${recordId}`, { fields: { 'შეკვეთის სტატუსი': STATUS_LABELS.verification_required }, typecast: true });
+    }
+    return recordId;
+  };
+}
